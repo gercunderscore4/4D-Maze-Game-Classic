@@ -1,0 +1,5 @@
+@ECHO OFF
+TITLE %~N0
+SET CMD=pyw -3.9 "%~DPN0.py"
+ECHO %CMD%
+START %CMD%
