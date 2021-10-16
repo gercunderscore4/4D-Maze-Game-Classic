@@ -13,6 +13,7 @@ FOR /F "TOKENS=2*" %%A IN ('REG QUERY "HKLM\SYSTEM\CurrentControlSet\Control\Ses
 SET PATH=%ORGINAL_PATH%;%PATH%
 
 ECHO Get additional libraries
+py -3.9 -m pip install --upgrade pip
 py -3.9 -m pip install pyglet
 py -3.9 -m pip install numpy
 
