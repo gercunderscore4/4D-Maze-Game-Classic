@@ -21,8 +21,11 @@ CONTROLS:
     SPACE : regenerate
 
 TODO:
+    - add 4D rotations
+    - add victory amimation (4D rations at different rates?)
     - add config file for customizable keys 
     - keep mouse controls fixed for now
+    - 
 """
 
 ################################################################################
@@ -38,7 +41,7 @@ from pyglet.gl import *
 import numpy as np
 
 ################################################################################
-# CONSTANTS
+# GAME CONSTANTS
 
 FPS = 30.0
 FOV = 60.0
@@ -48,40 +51,36 @@ TURNING = 90.0
 DEG = pi/180.0
 
 ################################################################################
-# MATH FUNCTIONS
+# MAZE CONSTANTS
 
-def normalizeBasis(f, l, u):
-    # f = forward
-    fsq = np.dot(f,f)
-    # l = left
-    l = l - f*(np.dot(l,f)/fsq)
-    lsq = np.dot(l,l)
-    # u = up
-    u = u - f*(np.dot(l,f)/fsq) - l*(np.dot(u,l)/lsq)
-    usq = np.dot(u,u)
-    # normalize
-    f = f/sqrt(fsq)
-    l = l/sqrt(lsq)
-    u = u/sqrt(usq)
+BLOCK_BIT = 1 # 2^0
+VISIT_BIT = 2 # 2^1
+
+################################################################################
+# EULER ROTATION
+
+def calculateEulerVectors(rotZ, rotY):
+    sz = sin(rotZ*DEG)
+    cz = cos(rotZ*DEG)
+    sy = sin(rotY*DEG)
+    cy = cos(rotY*DEG)
+    f = np.array([ cz * cy,\
+                  -sz * cy,\
+                        sy,\
+                  ])
+    l = np.array([-sz * cy,\
+                   cz * cy,\
+                        sy,\
+                  ])
+    u = np.array([ cz *-sy,\
+                  -sz *-sy,\
+                        cy,\
+                  ])
     return f, l, u
 
-def rotationQuaternion(theta, v):
-    ct = cos(theta/2)
-    st = sin(theta/2)
-    q = np.array([ct,\
-                  st*v[0],\
-                  st*v[1],\
-                  st*v[2],\
-                  ])
-    return q
 
-
-def quaternionMultiply(a, b):
-    return np.array([a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],\
-                     a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],\
-                     a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],\
-                     a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0],\
-                     ])
+################################################################################
+# QUATERNION ROTATION
 
 
 def quaternionRotate(p, theta, v):
@@ -110,23 +109,72 @@ def quaternionRotate(p, theta, v):
     return pp
 
 
-def hackedRotate(q, p):
-    k = np.array([- q[1]*p[0] - q[2]*p[1] - q[3]*p[2],\
-                  + q[0]*p[0] + q[2]*p[2] - q[3]*p[1],\
-                  + q[0]*p[1] - q[1]*p[2] + q[3]*p[0],\
-                  + q[0]*p[2] + q[1]*p[1] - q[2]*p[0],\
-                  ])
-    return np.array([- k[0]*q[1] + k[1]*q[0] - k[2]*q[3] + k[3]*q[2],\
-                     - k[0]*q[2] + k[1]*q[3] + k[2]*q[0] - k[3]*q[1],\
-                     - k[0]*q[3] - k[1]*q[2] + k[2]*q[1] + k[3]*q[0],\
+def quaternionMultiply(a, b):
+    return np.array([a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],\
+                     a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],\
+                     a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],\
+                     a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0],\
                      ])
 
 
-def rotateBasis(f, l, u, q):
+def rotationQuaternion(theta, v):
+    ct = cos(theta/2)
+    st = sin(theta/2)
+    q = np.array([ct,\
+                  st*v[0],\
+                  st*v[1],\
+                  st*v[2],\
+                  ])
+    return q
+
+
+def normalizeBasis(f, l, u):
+    # f = forward
+    fsq = np.dot(f,f)
+    # l = left
+    l = l - f*(np.dot(l,f)/fsq)
+    lsq = np.dot(l,l)
+    # u = up
+    u = u - f*(np.dot(l,f)/fsq) - l*(np.dot(u,l)/lsq)
+    usq = np.dot(u,u)
+    # normalize
+    f = f/sqrt(fsq)
+    l = l/sqrt(lsq)
+    u = u/sqrt(usq)
+    return f, l, u
+
+
+def hackedRotate(q, p):
+    k = np.array([- q[1]*p[0] - q[2]*p[1] - q[3]*p[2],
+                  + q[0]*p[0] + q[2]*p[2] - q[3]*p[1],
+                  + q[0]*p[1] - q[1]*p[2] + q[3]*p[0],
+                  + q[0]*p[2] + q[1]*p[1] - q[2]*p[0],
+                  ])
+    return np.array([- k[0]*q[1] + k[1]*q[0] - k[2]*q[3] + k[3]*q[2],
+                     - k[0]*q[2] + k[1]*q[3] + k[2]*q[0] - k[3]*q[1],
+                     - k[0]*q[3] - k[1]*q[2] + k[2]*q[1] + k[3]*q[0],
+                     ])
+
+
+def rotateBasisAngleVector(f, l, u, theta, v):
+    q = rotationQuaternion(theta, v)
     f = hackedRotate(q, f)
     l = hackedRotate(q, l)
     u = hackedRotate(q, u)
     return normalizeBasis(f, l, u)
+
+
+def rotateBasisQuaternion(f, l, u, q):
+    f = hackedRotate(q, f)
+    l = hackedRotate(q, l)
+    u = hackedRotate(q, u)
+    return normalizeBasis(f, l, u)
+
+
+def rotateBasis(f, l, u, t, v=None):
+    if v is None:
+        return rotateBasisQuaternion(f, l, u, t)
+    return rotateBasisAngleVector(f, l, u, t, v)
 
 
 ################################################################################
@@ -253,26 +301,10 @@ class ClassicMazeScene:
 
 
     def startScene(self):
-        # build maze
-        self.size = np.array([5,5,5,5],'int')
-        self.maze = np.zeros(self.size, 'int')
-        p = 0.5 # probability of wall
-        for i in range(self.size[0]):
-            for j in range(self.size[1]):
-                for k in range(self.size[2]):
-                    for h in range(self.size[3]):
-                        self.maze[i,j,k,h] = 1 if random() > p else 0
-        # set goal
-        self.goal = self.size-1
-        # remove wall from goal (if applicable)
-        self.maze[self.goal[0], self.goal[1], self.goal[2], self.goal[3]] = 0
-        # set user at start
-        self.position = np.zeros(4, 'int') #np.array([4,4,4,0])
-        # remove wall from start (if applicable)
-        self.maze[self.position[0], self.position[1], self.position[2], self.position[3]] = 0
-        # set victory status
-        self.victory = False
-        self.checkVictory()
+        # maze
+        self.buildMaze()
+        while not self.solveMaze():
+            self.buildMaze()
 
         # set viewed dimensions
         self.d = np.array([0,1,2,3])
@@ -327,8 +359,11 @@ class ClassicMazeScene:
             self.rotY -= dt*self.rotY/15
         # quaternion
         relativeVector = self.relativeVector[0]*self.up + self.relativeVector[1]*self.left
-        quaternion = rotationQuaternion(self.rotationalMomentum, relativeVector)
-        self.forward, self.left, self.up = rotateBasis(self.forward, self.left, self.up, quaternion)
+        self.forward, self.left, self.up = rotateBasis(self.forward, 
+                                                       self.left, 
+                                                       self.up, 
+                                                       self.rotationalMomentum, 
+                                                       relativeVector)
 
 
     def keyIsDown(self, k):
@@ -352,7 +387,7 @@ class ClassicMazeScene:
         temp = np.array(self.position)
         temp[i] += d
         # check for wall or boundary
-        if 0 <= temp[i] and temp[i] < self.size[i] and self.maze[temp[0],temp[1],temp[2],temp[3]] == 0:
+        if 0 <= temp[i] and temp[i] < self.size[i] and not (self.maze[temp[0],temp[1],temp[2],temp[3]] & BLOCK_BIT):
             # move
             self.position = temp
 
@@ -609,8 +644,8 @@ class ClassicMazeScene:
         #              z,    y,    z,\
         #              ux, uy, uz)
 
-        glu.gluLookAt(z-r*self.forward[0], y-r*self.forward[1], z-r*self.forward[2],\
-                      z,    y,    z,\
+        glu.gluLookAt(x-r*self.forward[0], y-r*self.forward[1], z-r*self.forward[2],
+                      x,    y,    z,
                       self.up[0], self.up[1], self.up[2])
 
         # draw
@@ -637,35 +672,35 @@ class ClassicMazeScene:
         y = self.position[self.d[1]]
         z = self.position[self.d[2]]
         self.cubeVerticesGL.extend([#  XD
-                                    x+0.1, y+0.1, z+0.1,\
-                                    x+0.1, y+0.1, z+0.9,\
-                                    x+0.1, y+0.9, z+0.9,\
-                                    x+0.1, y+0.9, z+0.1,\
+                                    x+0.1, y+0.1, z+0.1,
+                                    x+0.1, y+0.1, z+0.9,
+                                    x+0.1, y+0.9, z+0.9,
+                                    x+0.1, y+0.9, z+0.1,
                                     #  YD
-                                    x+0.1, y+0.1, z+0.1,\
-                                    x+0.9, y+0.1, z+0.1,\
-                                    x+0.9, y+0.1, z+0.9,\
-                                    x+0.1, y+0.1, z+0.9,\
+                                    x+0.1, y+0.1, z+0.1,
+                                    x+0.9, y+0.1, z+0.1,
+                                    x+0.9, y+0.1, z+0.9,
+                                    x+0.1, y+0.1, z+0.9,
                                     #  ZD
-                                    x+0.1, y+0.1, z+0.1,\
-                                    x+0.1, y+0.9, z+0.1,\
-                                    x+0.9, y+0.9, z+0.1,\
-                                    x+0.9, y+0.1, z+0.1,\
+                                    x+0.1, y+0.1, z+0.1,
+                                    x+0.1, y+0.9, z+0.1,
+                                    x+0.9, y+0.9, z+0.1,
+                                    x+0.9, y+0.1, z+0.1,
                                     #  XU
-                                    x+0.9, y+0.1, z+0.1,\
-                                    x+0.9, y+0.9, z+0.1,\
-                                    x+0.9, y+0.9, z+0.9,\
-                                    x+0.9, y+0.1, z+0.9,\
+                                    x+0.9, y+0.1, z+0.1,
+                                    x+0.9, y+0.9, z+0.1,
+                                    x+0.9, y+0.9, z+0.9,
+                                    x+0.9, y+0.1, z+0.9,
                                     #  YU
-                                    x+0.1, y+0.9, z+0.1,\
-                                    x+0.1, y+0.9, z+0.9,\
-                                    x+0.9, y+0.9, z+0.9,\
-                                    x+0.9, y+0.9, z+0.1,\
+                                    x+0.1, y+0.9, z+0.1,
+                                    x+0.1, y+0.9, z+0.9,
+                                    x+0.9, y+0.9, z+0.9,
+                                    x+0.9, y+0.9, z+0.1,
                                     #  ZU
-                                    x+0.1, y+0.1, z+0.9,\
-                                    x+0.9, y+0.1, z+0.9,\
-                                    x+0.9, y+0.9, z+0.9,\
-                                    x+0.1, y+0.9, z+0.9,\
+                                    x+0.1, y+0.1, z+0.9,
+                                    x+0.9, y+0.1, z+0.9,
+                                    x+0.9, y+0.9, z+0.9,
+                                    x+0.1, y+0.9, z+0.9,
                                     ])
         self.cubeColorsGL.extend([0.0, 0.0, 0.0, 1.0]*4*6)
         # convert to GL format
@@ -686,45 +721,45 @@ class ClassicMazeScene:
             y = self.goal[self.d[1]]
             z = self.goal[self.d[2]]
             self.goalVerticesGL.extend([#  XD
-                                        x+0.2, y+0.2, z+0.2,\
-                                        x+0.2, y+0.2, z+1.0,\
-                                        x+0.2, y+1.0, z+1.0,\
-                                        x+0.2, y+1.0, z+0.2,\
+                                        x+0.2, y+0.2, z+0.2,
+                                        x+0.2, y+0.2, z+1.0,
+                                        x+0.2, y+1.0, z+1.0,
+                                        x+0.2, y+1.0, z+0.2,
                                         #  YD
-                                        x+0.2, y+0.2, z+0.2,\
-                                        x+1.0, y+0.2, z+0.2,\
-                                        x+1.0, y+0.2, z+1.0,\
-                                        x+0.2, y+0.2, z+1.0,\
+                                        x+0.2, y+0.2, z+0.2,
+                                        x+1.0, y+0.2, z+0.2,
+                                        x+1.0, y+0.2, z+1.0,
+                                        x+0.2, y+0.2, z+1.0,
                                         #  ZD
-                                        x+0.2, y+0.2, z+0.2,\
-                                        x+0.2, y+1.0, z+0.2,\
-                                        x+1.0, y+1.0, z+0.2,\
-                                        x+1.0, y+0.2, z+0.2,\
+                                        x+0.2, y+0.2, z+0.2,
+                                        x+0.2, y+1.0, z+0.2,
+                                        x+1.0, y+1.0, z+0.2,
+                                        x+1.0, y+0.2, z+0.2,
                                         #  XU
-                                        x+1.0, y+0.2, z+0.2,\
-                                        x+1.0, y+1.0, z+0.2,\
-                                        x+1.0, y+1.0, z+1.0,\
-                                        x+1.0, y+0.2, z+1.0,\
+                                        x+1.0, y+0.2, z+0.2,
+                                        x+1.0, y+1.0, z+0.2,
+                                        x+1.0, y+1.0, z+1.0,
+                                        x+1.0, y+0.2, z+1.0,
                                         #  YU
-                                        x+0.2, y+1.0, z+0.2,\
-                                        x+0.2, y+1.0, z+1.0,\
-                                        x+1.0, y+1.0, z+1.0,\
-                                        x+1.0, y+1.0, z+0.2,\
+                                        x+0.2, y+1.0, z+0.2,
+                                        x+0.2, y+1.0, z+1.0,
+                                        x+1.0, y+1.0, z+1.0,
+                                        x+1.0, y+1.0, z+0.2,
                                         #  ZU
-                                        x+0.2, y+0.2, z+1.0,\
-                                        x+1.0, y+0.2, z+1.0,\
-                                        x+1.0, y+1.0, z+1.0,\
-                                        x+0.2, y+1.0, z+1.0,\
+                                        x+0.2, y+0.2, z+1.0,
+                                        x+1.0, y+0.2, z+1.0,
+                                        x+1.0, y+1.0, z+1.0,
+                                        x+0.2, y+1.0, z+1.0,
                                         ])
-            self.goalColorsGL.extend([1.0, 0.4, 0.0, 1.0,\
-                                      1.0, 0.6, 0.0, 1.0,\
-                                      1.0, 0.8, 0.0, 1.0,\
-                                      1.0, 0.6, 0.0, 1.0,\
+            self.goalColorsGL.extend([1.0, 0.4, 0.0, 1.0,
+                                      1.0, 0.6, 0.0, 1.0,
+                                      1.0, 0.8, 0.0, 1.0,
+                                      1.0, 0.6, 0.0, 1.0,
                                      ]*3)
-            self.goalColorsGL.extend([1.0, 0.6, 0.0, 1.0,\
-                                      1.0, 0.8, 0.0, 1.0,\
-                                      1.0, 1.0, 0.0, 1.0,\
-                                      1.0, 0.8, 0.0, 1.0,\
+            self.goalColorsGL.extend([1.0, 0.6, 0.0, 1.0,
+                                      1.0, 0.8, 0.0, 1.0,
+                                      1.0, 1.0, 0.0, 1.0,
+                                      1.0, 0.8, 0.0, 1.0,
                                      ]*3)
         # convert to GL format
         self.goalVerticesGL = (GLfloat * len(self.goalVerticesGL))(*self.goalVerticesGL)
@@ -756,19 +791,19 @@ class ClassicMazeScene:
         i[self.d[1]] = self.position[self.d[1]]
         i[self.d[2]] = self.position[self.d[2]]
         for i[self.d[0]] in range(self.size[self.d[0]]):
-            if self.maze[i[0],i[1],i[2],i[3]] == 1:
+            if self.maze[i[0],i[1],i[2],i[3]] & BLOCK_BIT:
                 self.generateBlock(i, drawX=False, drawY=True, drawZ=True)
         # Y
         i[self.d[0]] = self.position[self.d[0]]
         i[self.d[2]] = self.position[self.d[2]]
         for i[self.d[1]] in range(self.size[self.d[1]]):
-            if self.maze[i[0],i[1],i[2],i[3]] == 1:
+            if self.maze[i[0],i[1],i[2],i[3]] & BLOCK_BIT:
                 self.generateBlock(i, drawX=True, drawY=False, drawZ=True)
         # Z
         i[self.d[0]] = self.position[self.d[0]]
         i[self.d[1]] = self.position[self.d[1]]
         for i[self.d[2]] in range(self.size[self.d[2]]):
-            if self.maze[i[0],i[1],i[2],i[3]] == 1:
+            if self.maze[i[0],i[1],i[2],i[3]] & BLOCK_BIT:
                 self.generateBlock(i, drawX=True, drawY=True, drawZ=False)
 
 
@@ -782,19 +817,19 @@ class ClassicMazeScene:
         i[self.d[2]] = self.position[self.d[2]]
         for i[self.d[0]] in range(self.size[self.d[0]]):
             for i[self.d[1]] in range(self.size[self.d[1]]):
-                if self.maze[i[0],i[1],i[2],i[3]] == 1:
+                if self.maze[i[0],i[1],i[2],i[3]] & BLOCK_BIT:
                     self.generateBlock(i, drawX=False, drawY=False, drawZ=True)
         # XZ
         i[self.d[1]] = self.position[self.d[1]]
         for i[self.d[0]] in range(self.size[self.d[0]]):
             for i[self.d[2]] in range(self.size[self.d[2]]):
-                if self.maze[i[0],i[1],i[2],i[3]] == 1:
+                if self.maze[i[0],i[1],i[2],i[3]] & BLOCK_BIT:
                     self.generateBlock(i, drawX=False, drawY=True, drawZ=False)
         # YZ
         i[self.d[0]] = self.position[self.d[0]]
         for i[self.d[1]] in range(self.size[self.d[1]]):
             for i[self.d[2]] in range(self.size[self.d[2]]):
-                if self.maze[i[0],i[1],i[2],i[3]] == 1:
+                if self.maze[i[0],i[1],i[2],i[3]] & BLOCK_BIT:
                     self.generateBlock(i, drawX=True, drawY=False, drawZ=False)
 
 
@@ -807,7 +842,7 @@ class ClassicMazeScene:
         for i[self.d[0]] in range(self.size[self.d[0]]):
             for i[self.d[1]] in range(self.size[self.d[1]]):
                 for i[self.d[2]] in range(self.size[self.d[2]]):
-                    if self.maze[i[0],i[1],i[2],i[3]] == 1:
+                    if self.maze[i[0],i[1],i[2],i[3]] & BLOCK_BIT:
                         self.generateBlock(i, drawX=True, drawY=True, drawZ=True)
 
 
@@ -827,10 +862,10 @@ class ClassicMazeScene:
            i[self.d[0]] < 0 or\
            self.maze[i[0], i[1], i[2], i[3]] == 0:
             self.mazeVerticesGL.extend([#  XD
-                                        x  ,y  ,z  ,\
-                                        x  ,y  ,z+1,\
-                                        x  ,y+1,z+1,\
-                                        x  ,y+1,z  ,\
+                                        x  ,y  ,z  ,
+                                        x  ,y  ,z+1,
+                                        x  ,y+1,z+1,
+                                        x  ,y+1,z  ,
                                         ])
             self.mazeColorsGL.extend([r,g,b,a]*4)
         # x+
@@ -840,10 +875,10 @@ class ClassicMazeScene:
            i[self.d[0]] >= self.size[self.d[0]] or\
            self.maze[i[0], i[1], i[2], i[3]] == 0:
             self.mazeVerticesGL.extend([#  XU
-                                        x+1,y  ,z  ,\
-                                        x+1,y+1,z  ,\
-                                        x+1,y+1,z+1,\
-                                        x+1,y  ,z+1,\
+                                        x+1,y  ,z  ,
+                                        x+1,y+1,z  ,
+                                        x+1,y+1,z+1,
+                                        x+1,y  ,z+1,
                                         ])
             self.mazeColorsGL.extend([r,g,b,a]*4)
         # y-
@@ -853,10 +888,10 @@ class ClassicMazeScene:
            i[self.d[1]] < 0 or\
            self.maze[i[0], i[1], i[2], i[3]] == 0:
             self.mazeVerticesGL.extend([#  YD
-                                        x  ,y  ,z  ,\
-                                        x+1,y  ,z  ,\
-                                        x+1,y  ,z+1,\
-                                        x  ,y  ,z+1,\
+                                        x  ,y  ,z  ,
+                                        x+1,y  ,z  ,
+                                        x+1,y  ,z+1,
+                                        x  ,y  ,z+1,
                                         ])
             self.mazeColorsGL.extend([r,g,b,a]*4)
         # y+
@@ -866,10 +901,10 @@ class ClassicMazeScene:
            i[self.d[1]] >= self.size[self.d[1]] or\
            self.maze[i[0], i[1], i[2], i[3]] == 0:
             self.mazeVerticesGL.extend([#  YU
-                                        x  ,y+1,z  ,\
-                                        x  ,y+1,z+1,\
-                                        x+1,y+1,z+1,\
-                                        x+1,y+1,z  ,\
+                                        x  ,y+1,z  ,
+                                        x  ,y+1,z+1,
+                                        x+1,y+1,z+1,
+                                        x+1,y+1,z  ,
                                         ])
             self.mazeColorsGL.extend([r,g,b,a]*4)
         # z-
@@ -879,10 +914,10 @@ class ClassicMazeScene:
            i[self.d[2]] < 0 or\
            self.maze[i[0], i[1], i[2], i[3]] == 0:
             self.mazeVerticesGL.extend([#  ZD
-                                        x  ,y  ,z  ,\
-                                        x  ,y+1,z  ,\
-                                        x+1,y+1,z  ,\
-                                        x+1,y  ,z  ,\
+                                        x  ,y  ,z  ,
+                                        x  ,y+1,z  ,
+                                        x+1,y+1,z  ,
+                                        x+1,y  ,z  ,
                                         ])
             self.mazeColorsGL.extend([r,g,b,a]*4)
         # z+
@@ -892,10 +927,10 @@ class ClassicMazeScene:
            i[self.d[2]] >= self.size[self.d[2]] or\
            self.maze[i[0], i[1], i[2], i[3]] == 0:
             self.mazeVerticesGL.extend([#  ZU
-                                        x  ,y  ,z+1,\
-                                        x+1,y  ,z+1,\
-                                        x+1,y+1,z+1,\
-                                        x  ,y+1,z+1,\
+                                        x  ,y  ,z+1,
+                                        x+1,y  ,z+1,
+                                        x+1,y+1,z+1,
+                                        x  ,y+1,z+1,
                                         ])
             self.mazeColorsGL.extend([r,g,b,a]*4)
         i[self.d[2]] -= 1
@@ -919,37 +954,37 @@ class ClassicMazeScene:
         else:
             color = [0.0, 0.0, 0.0, a]
             color[d] = 1.0
-        self.mapVerticesGL.extend([-mapX-e, mapY  +e, +0.1,\
-                                   -mapX-e, mapY-l-e, +0.1,\
-                                    mapX+e, mapY-l-e, +0.1,\
-                                    mapX+e, mapY  +e, +0.1,\
+        self.mapVerticesGL.extend([-mapX-e, mapY  +e, +0.1,
+                                   -mapX-e, mapY-l-e, +0.1,
+                                    mapX+e, mapY-l-e, +0.1,
+                                    mapX+e, mapY  +e, +0.1,
                                    # <-
-                                    mapX+(0.5)*l, mapY    , +0.1,\
-                                    mapX+(0.5)*l, mapY-l  , +0.1,\
-                                    mapX+(1.0)*l, mapY-l/2, +0.1,\
-                                    mapX+(1.0)*l, mapY-l/2, +0.1,\
+                                    mapX+(0.5)*l, mapY    , +0.1,
+                                    mapX+(0.5)*l, mapY-l  , +0.1,
+                                    mapX+(1.0)*l, mapY-l/2, +0.1,
+                                    mapX+(1.0)*l, mapY-l/2, +0.1,
                                    # ->
-                                   -mapX-(0.5)*l, mapY    , +0.1,\
-                                   -mapX-(1.0)*l, mapY-l/2, +0.1,\
-                                   -mapX-(1.0)*l, mapY-l/2, +0.1,\
-                                   -mapX-(0.5)*l, mapY-l  , +0.1,\
+                                   -mapX-(0.5)*l, mapY    , +0.1,
+                                   -mapX-(1.0)*l, mapY-l/2, +0.1,
+                                   -mapX-(1.0)*l, mapY-l/2, +0.1,
+                                   -mapX-(0.5)*l, mapY-l  , +0.1,
                                    ])
         self.mapColorsGL.extend([0.0, 0.0, 0.0, a]*2)
         self.mapColorsGL.extend(color*2)
         self.mapColorsGL.extend([0.0, 0.0, 0.0, a]*8)
         # interior background (over border)
-        self.mapVerticesGL.extend([ mapX, mapY  , 0.0,\
-                                   -mapX, mapY  , 0.0,\
-                                   -mapX, mapY-l, 0.0,\
-                                    mapX, mapY-l, 0.0,\
+        self.mapVerticesGL.extend([ mapX, mapY  , 0.0,
+                                   -mapX, mapY  , 0.0,
+                                   -mapX, mapY-l, 0.0,
+                                    mapX, mapY-l, 0.0,
                                    ])
         self.mapColorsGL.extend([1.0, 1.0, 1.0, 1.0]*4)
         # cube
         i = np.array(self.position) # easier to type and used for indexing blocks
-        self.mapVerticesGL.extend([-mapX+(i[d]+0.1)*l, mapY-(0.1)*l, -0.2,\
-                                   -mapX+(i[d]+0.1)*l, mapY-(0.9)*l, -0.2,\
-                                   -mapX+(i[d]+0.9)*l, mapY-(0.9)*l, -0.2,\
-                                   -mapX+(i[d]+0.9)*l, mapY-(0.1)*l, -0.2,\
+        self.mapVerticesGL.extend([-mapX+(i[d]+0.1)*l, mapY-(0.1)*l, -0.2,
+                                   -mapX+(i[d]+0.1)*l, mapY-(0.9)*l, -0.2,
+                                   -mapX+(i[d]+0.9)*l, mapY-(0.9)*l, -0.2,
+                                   -mapX+(i[d]+0.9)*l, mapY-(0.1)*l, -0.2,
                                    ])
         self.mapColorsGL.extend([0.0, 0.0, 0.0, 1.0]*4)
         # goal
@@ -957,10 +992,10 @@ class ClassicMazeScene:
            (d == 1 or i[1] == self.goal[1]) and\
            (d == 2 or i[2] == self.goal[2]) and\
            (d == 3 or i[3] == self.goal[3]):
-            self.mapVerticesGL.extend([-mapX+(self.goal[d]+0.2)*l, mapY-(0.0)*l, -0.3,\
-                                       -mapX+(self.goal[d]+0.2)*l, mapY-(0.8)*l, -0.3,\
-                                       -mapX+(self.goal[d]+1.0)*l, mapY-(0.8)*l, -0.3,\
-                                       -mapX+(self.goal[d]+1.0)*l, mapY-(0.0)*l, -0.3,\
+            self.mapVerticesGL.extend([-mapX+(self.goal[d]+0.2)*l, mapY-(0.0)*l, -0.3,
+                                       -mapX+(self.goal[d]+0.2)*l, mapY-(0.8)*l, -0.3,
+                                       -mapX+(self.goal[d]+1.0)*l, mapY-(0.8)*l, -0.3,
+                                       -mapX+(self.goal[d]+1.0)*l, mapY-(0.0)*l, -0.3,
                                        ])
             self.mapColorsGL.extend([1.0, 0.7, 0.0, 1.0,\
                                      1.0, 0.4, 0.0, 1.0,\
@@ -971,10 +1006,10 @@ class ClassicMazeScene:
         for i[d] in range(self.size[d]):
             if self.maze[i[0], i[1], i[2], i[3]] == 1:
                 r, g, b, a = self.blockColor(i[0], i[1], i[2], i[3])
-                self.mapVerticesGL.extend([-mapX+(i[d]  )*l, mapY  , -0.1,\
-                                           -mapX+(i[d]  )*l, mapY-l, -0.1,\
-                                           -mapX+(i[d]+1)*l, mapY-l, -0.1,\
-                                           -mapX+(i[d]+1)*l, mapY  , -0.1,\
+                self.mapVerticesGL.extend([-mapX+(i[d]  )*l, mapY  , -0.1,
+                                           -mapX+(i[d]  )*l, mapY-l, -0.1,
+                                           -mapX+(i[d]+1)*l, mapY-l, -0.1,
+                                           -mapX+(i[d]+1)*l, mapY  , -0.1,
                                            ])
                 self.mapColorsGL.extend([r,g,b,a]*4)
 
@@ -1005,273 +1040,273 @@ class ClassicMazeScene:
             y = self.size[self.d[1]]
             z = self.size[self.d[2]]
             if self.d[0] == 0:
-                colorX = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          1.0, 0.0, 0.0, 1.0,\
-                          1.0, 0.0, 0.0, 1.0,\
+                colorX = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          1.0, 0.0, 0.0, 1.0,
+                          1.0, 0.0, 0.0, 1.0,
                           ]
             elif self.d[0] == 1:
-                colorX = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          0.0, 1.0, 0.0, 1.0,\
-                          0.0, 1.0, 0.0, 1.0,\
+                colorX = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          0.0, 1.0, 0.0, 1.0,
+                          0.0, 1.0, 0.0, 1.0,
                           ]
             elif self.d[0] == 2:
-                colorX = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 1.0, 1.0,\
-                          0.0, 0.0, 1.0, 1.0,\
+                colorX = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 1.0, 1.0,
+                          0.0, 0.0, 1.0, 1.0,
                           ]
             elif self.d[0] == 3:
-                colorX = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          1.0, 1.0, 1.0, 1.0,\
-                          1.0, 1.0, 1.0, 1.0,\
+                colorX = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          1.0, 1.0, 1.0, 1.0,
+                          1.0, 1.0, 1.0, 1.0,
                           ]
             if self.d[1] == 0:
-                colorY = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          1.0, 0.0, 0.0, 1.0,\
-                          1.0, 0.0, 0.0, 1.0,\
+                colorY = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          1.0, 0.0, 0.0, 1.0,
+                          1.0, 0.0, 0.0, 1.0,
                           ]
             elif self.d[1] == 1:
-                colorY = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          0.0, 1.0, 0.0, 1.0,\
-                          0.0, 1.0, 0.0, 1.0,\
+                colorY = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          0.0, 1.0, 0.0, 1.0,
+                          0.0, 1.0, 0.0, 1.0,
                           ]
             elif self.d[1] == 2:
-                colorY = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 1.0, 1.0,\
-                          0.0, 0.0, 1.0, 1.0,\
+                colorY = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 1.0, 1.0,
+                          0.0, 0.0, 1.0, 1.0,
                           ]
             elif self.d[1] == 3:
-                colorY = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          1.0, 1.0, 1.0, 1.0,\
-                          1.0, 1.0, 1.0, 1.0,\
+                colorY = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          1.0, 1.0, 1.0, 1.0,
+                          1.0, 1.0, 1.0, 1.0,
                           ]
             if self.d[2] == 0:
-                colorZ = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          1.0, 0.0, 0.0, 1.0,\
-                          1.0, 0.0, 0.0, 1.0,\
+                colorZ = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          1.0, 0.0, 0.0, 1.0,
+                          1.0, 0.0, 0.0, 1.0,
                           ]
             elif self.d[2] == 1:
-                colorZ = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          0.0, 1.0, 0.0, 1.0,\
-                          0.0, 1.0, 0.0, 1.0,\
+                colorZ = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          0.0, 1.0, 0.0, 1.0,
+                          0.0, 1.0, 0.0, 1.0,
                           ]
             elif self.d[2] == 2:
-                colorZ = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 1.0, 1.0,\
-                          0.0, 0.0, 1.0, 1.0,\
+                colorZ = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 1.0, 1.0,
+                          0.0, 0.0, 1.0, 1.0,
                           ]
             elif self.d[2] == 3:
-                colorZ = [0.0, 0.0, 0.0, 1.0,\
-                          0.0, 0.0, 0.0, 1.0,\
-                          1.0, 1.0, 1.0, 1.0,\
-                          1.0, 1.0, 1.0, 1.0,\
+                colorZ = [0.0, 0.0, 0.0, 1.0,
+                          0.0, 0.0, 0.0, 1.0,
+                          1.0, 1.0, 1.0, 1.0,
+                          1.0, 1.0, 1.0, 1.0,
                           ]
-            self.hintVerticesGL.extend([ -d  , -d-h, -d  ,\
-                                         -d-h, -d-h, -d-h,\
-                                        x+d+h, -d-h, -d-h,\
-                                        x+d  , -d-h, -d  ,\
-                                         -d  , -d  , -d  ,\
-                                         -d  , -d-h, -d  ,\
-                                        x+d  , -d-h, -d  ,\
-                                        x+d  , -d  , -d  ,\
-                                         -d  , -d  , -d-h,\
-                                         -d  , -d  , -d  ,\
-                                        x+d  , -d  , -d  ,\
-                                        x+d  , -d  , -d-h,\
-                                         -d-h, -d-h, -d-h,\
-                                         -d  , -d  , -d-h,\
-                                        x+d  , -d  , -d-h,\
-                                        x+d+h, -d-h, -d-h,\
-                                         -d  ,y+d  , -d  ,\
-                                         -d  ,y+d  , -d-h,\
-                                        x+d  ,y+d  , -d-h,\
-                                        x+d  ,y+d  , -d  ,\
-                                         -d  ,y+d+h, -d  ,\
-                                         -d  ,y+d  , -d  ,\
-                                        x+d  ,y+d  , -d  ,\
-                                        x+d  ,y+d+h, -d  ,\
-                                         -d-h,y+d+h, -d-h,\
-                                         -d  ,y+d+h, -d  ,\
-                                        x+d  ,y+d+h, -d  ,\
-                                        x+d+h,y+d+h, -d-h,\
-                                         -d  ,y+d  , -d-h,\
-                                         -d-h,y+d+h, -d-h,\
-                                        x+d+h,y+d+h, -d-h,\
-                                        x+d  ,y+d  , -d-h,\
-                                         -d-h, -d-h,z+d+h,\
-                                         -d  , -d-h,z+d  ,\
-                                        x+d  , -d-h,z+d  ,\
-                                        x+d+h, -d-h,z+d+h,\
-                                         -d  , -d  ,z+d+h,\
-                                         -d-h, -d-h,z+d+h,\
-                                        x+d+h, -d-h,z+d+h,\
-                                        x+d  , -d  ,z+d+h,\
-                                         -d  , -d  ,z+d  ,\
-                                         -d  , -d  ,z+d+h,\
-                                        x+d  , -d  ,z+d+h,\
-                                        x+d  , -d  ,z+d  ,\
-                                         -d  , -d-h,z+d  ,\
-                                         -d  , -d  ,z+d  ,\
-                                        x+d  , -d  ,z+d  ,\
-                                        x+d  , -d-h,z+d  ,\
-                                         -d  ,y+d  ,z+d+h,\
-                                         -d  ,y+d  ,z+d  ,\
-                                        x+d  ,y+d  ,z+d  ,\
-                                        x+d  ,y+d  ,z+d+h,\
-                                         -d-h,y+d+h,z+d+h,\
-                                         -d  ,y+d  ,z+d+h,\
-                                        x+d  ,y+d  ,z+d+h,\
-                                        x+d+h,y+d+h,z+d+h,\
-                                         -d  ,y+d+h,z+d  ,\
-                                         -d-h,y+d+h,z+d+h,\
-                                        x+d+h,y+d+h,z+d+h,\
-                                        x+d  ,y+d+h,z+d  ,\
-                                         -d  ,y+d  ,z+d  ,\
-                                         -d  ,y+d+h,z+d  ,\
-                                        x+d  ,y+d+h,z+d  ,\
-                                        x+d  ,y+d  ,z+d  ,\
+            self.hintVerticesGL.extend([ -d  , -d-h, -d  ,
+                                         -d-h, -d-h, -d-h,
+                                        x+d+h, -d-h, -d-h,
+                                        x+d  , -d-h, -d  ,
+                                         -d  , -d  , -d  ,
+                                         -d  , -d-h, -d  ,
+                                        x+d  , -d-h, -d  ,
+                                        x+d  , -d  , -d  ,
+                                         -d  , -d  , -d-h,
+                                         -d  , -d  , -d  ,
+                                        x+d  , -d  , -d  ,
+                                        x+d  , -d  , -d-h,
+                                         -d-h, -d-h, -d-h,
+                                         -d  , -d  , -d-h,
+                                        x+d  , -d  , -d-h,
+                                        x+d+h, -d-h, -d-h,
+                                         -d  ,y+d  , -d  ,
+                                         -d  ,y+d  , -d-h,
+                                        x+d  ,y+d  , -d-h,
+                                        x+d  ,y+d  , -d  ,
+                                         -d  ,y+d+h, -d  ,
+                                         -d  ,y+d  , -d  ,
+                                        x+d  ,y+d  , -d  ,
+                                        x+d  ,y+d+h, -d  ,
+                                         -d-h,y+d+h, -d-h,
+                                         -d  ,y+d+h, -d  ,
+                                        x+d  ,y+d+h, -d  ,
+                                        x+d+h,y+d+h, -d-h,
+                                         -d  ,y+d  , -d-h,
+                                         -d-h,y+d+h, -d-h,
+                                        x+d+h,y+d+h, -d-h,
+                                        x+d  ,y+d  , -d-h,
+                                         -d-h, -d-h,z+d+h,
+                                         -d  , -d-h,z+d  ,
+                                        x+d  , -d-h,z+d  ,
+                                        x+d+h, -d-h,z+d+h,
+                                         -d  , -d  ,z+d+h,
+                                         -d-h, -d-h,z+d+h,
+                                        x+d+h, -d-h,z+d+h,
+                                        x+d  , -d  ,z+d+h,
+                                         -d  , -d  ,z+d  ,
+                                         -d  , -d  ,z+d+h,
+                                        x+d  , -d  ,z+d+h,
+                                        x+d  , -d  ,z+d  ,
+                                         -d  , -d-h,z+d  ,
+                                         -d  , -d  ,z+d  ,
+                                        x+d  , -d  ,z+d  ,
+                                        x+d  , -d-h,z+d  ,
+                                         -d  ,y+d  ,z+d+h,
+                                         -d  ,y+d  ,z+d  ,
+                                        x+d  ,y+d  ,z+d  ,
+                                        x+d  ,y+d  ,z+d+h,
+                                         -d-h,y+d+h,z+d+h,
+                                         -d  ,y+d  ,z+d+h,
+                                        x+d  ,y+d  ,z+d+h,
+                                        x+d+h,y+d+h,z+d+h,
+                                         -d  ,y+d+h,z+d  ,
+                                         -d-h,y+d+h,z+d+h,
+                                        x+d+h,y+d+h,z+d+h,
+                                        x+d  ,y+d+h,z+d  ,
+                                         -d  ,y+d  ,z+d  ,
+                                         -d  ,y+d+h,z+d  ,
+                                        x+d  ,y+d+h,z+d  ,
+                                        x+d  ,y+d  ,z+d  ,
                                         ])
             self.hintColorsGL.extend(colorX*16)
-            self.hintVerticesGL.extend([ -d  , -d  , -d-h,\
-                                         -d-h, -d-h, -d-h,\
-                                         -d-h,y+d+h, -d-h,\
-                                         -d  ,y+d  , -d-h,\
-                                         -d  , -d  , -d  ,\
-                                         -d  , -d  , -d-h,\
-                                         -d  ,y+d  , -d-h,\
-                                         -d  ,y+d  , -d  ,\
-                                         -d-h, -d  , -d  ,\
-                                         -d  , -d  , -d  ,\
-                                         -d  ,y+d  , -d  ,\
-                                         -d-h,y+d  , -d  ,\
-                                         -d-h, -d-h, -d-h,\
-                                         -d-h, -d  , -d  ,\
-                                         -d-h,y+d  , -d  ,\
-                                         -d-h,y+d+h, -d-h,\
-                                         -d  , -d  ,z+d  ,\
-                                         -d-h, -d  ,z+d  ,\
-                                         -d-h,y+d  ,z+d  ,\
-                                         -d  ,y+d  ,z+d  ,\
-                                         -d  , -d  ,z+d+h,\
-                                         -d  , -d  ,z+d  ,\
-                                         -d  ,y+d  ,z+d  ,\
-                                         -d  ,y+d  ,z+d+h,\
-                                         -d-h, -d-h,z+d+h,\
-                                         -d  , -d  ,z+d+h,\
-                                         -d  ,y+d  ,z+d+h,\
-                                         -d-h,y+d+h,z+d+h,\
-                                         -d-h, -d  ,z+d  ,\
-                                         -d-h, -d-h,z+d+h,\
-                                         -d-h,y+d+h,z+d+h,\
-                                         -d-h,y+d  ,z+d  ,\
-                                        x+d+h, -d-h, -d-h,\
-                                        x+d  , -d  , -d-h,\
-                                        x+d  ,y+d  , -d-h,\
-                                        x+d+h,y+d+h, -d-h,\
-                                        x+d+h, -d  , -d  ,\
-                                        x+d+h, -d-h, -d-h,\
-                                        x+d+h,y+d+h, -d-h,\
-                                        x+d+h,y+d  , -d  ,\
-                                        x+d  , -d  , -d  ,\
-                                        x+d+h, -d  , -d  ,\
-                                        x+d+h,y+d  , -d  ,\
-                                        x+d  ,y+d  , -d  ,\
-                                        x+d  , -d  , -d-h,\
-                                        x+d  , -d  , -d  ,\
-                                        x+d  ,y+d  , -d  ,\
-                                        x+d  ,y+d  , -d-h,\
-                                        x+d+h, -d  ,z+d  ,\
-                                        x+d  , -d  ,z+d  ,\
-                                        x+d  ,y+d  ,z+d  ,\
-                                        x+d+h,y+d  ,z+d  ,\
-                                        x+d+h, -d-h,z+d+h,\
-                                        x+d+h, -d  ,z+d  ,\
-                                        x+d+h,y+d  ,z+d  ,\
-                                        x+d+h,y+d+h,z+d+h,\
-                                        x+d  , -d  ,z+d+h,\
-                                        x+d+h, -d-h,z+d+h,\
-                                        x+d+h,y+d+h,z+d+h,\
-                                        x+d  ,y+d  ,z+d+h,\
-                                        x+d  , -d  ,z+d  ,\
-                                        x+d  , -d  ,z+d+h,\
-                                        x+d  ,y+d  ,z+d+h,\
-                                        x+d  ,y+d  ,z+d  ,\
+            self.hintVerticesGL.extend([ -d  , -d  , -d-h,
+                                         -d-h, -d-h, -d-h,
+                                         -d-h,y+d+h, -d-h,
+                                         -d  ,y+d  , -d-h,
+                                         -d  , -d  , -d  ,
+                                         -d  , -d  , -d-h,
+                                         -d  ,y+d  , -d-h,
+                                         -d  ,y+d  , -d  ,
+                                         -d-h, -d  , -d  ,
+                                         -d  , -d  , -d  ,
+                                         -d  ,y+d  , -d  ,
+                                         -d-h,y+d  , -d  ,
+                                         -d-h, -d-h, -d-h,
+                                         -d-h, -d  , -d  ,
+                                         -d-h,y+d  , -d  ,
+                                         -d-h,y+d+h, -d-h,
+                                         -d  , -d  ,z+d  ,
+                                         -d-h, -d  ,z+d  ,
+                                         -d-h,y+d  ,z+d  ,
+                                         -d  ,y+d  ,z+d  ,
+                                         -d  , -d  ,z+d+h,
+                                         -d  , -d  ,z+d  ,
+                                         -d  ,y+d  ,z+d  ,
+                                         -d  ,y+d  ,z+d+h,
+                                         -d-h, -d-h,z+d+h,
+                                         -d  , -d  ,z+d+h,
+                                         -d  ,y+d  ,z+d+h,
+                                         -d-h,y+d+h,z+d+h,
+                                         -d-h, -d  ,z+d  ,
+                                         -d-h, -d-h,z+d+h,
+                                         -d-h,y+d+h,z+d+h,
+                                         -d-h,y+d  ,z+d  ,
+                                        x+d+h, -d-h, -d-h,
+                                        x+d  , -d  , -d-h,
+                                        x+d  ,y+d  , -d-h,
+                                        x+d+h,y+d+h, -d-h,
+                                        x+d+h, -d  , -d  ,
+                                        x+d+h, -d-h, -d-h,
+                                        x+d+h,y+d+h, -d-h,
+                                        x+d+h,y+d  , -d  ,
+                                        x+d  , -d  , -d  ,
+                                        x+d+h, -d  , -d  ,
+                                        x+d+h,y+d  , -d  ,
+                                        x+d  ,y+d  , -d  ,
+                                        x+d  , -d  , -d-h,
+                                        x+d  , -d  , -d  ,
+                                        x+d  ,y+d  , -d  ,
+                                        x+d  ,y+d  , -d-h,
+                                        x+d+h, -d  ,z+d  ,
+                                        x+d  , -d  ,z+d  ,
+                                        x+d  ,y+d  ,z+d  ,
+                                        x+d+h,y+d  ,z+d  ,
+                                        x+d+h, -d-h,z+d+h,
+                                        x+d+h, -d  ,z+d  ,
+                                        x+d+h,y+d  ,z+d  ,
+                                        x+d+h,y+d+h,z+d+h,
+                                        x+d  , -d  ,z+d+h,
+                                        x+d+h, -d-h,z+d+h,
+                                        x+d+h,y+d+h,z+d+h,
+                                        x+d  ,y+d  ,z+d+h,
+                                        x+d  , -d  ,z+d  ,
+                                        x+d  , -d  ,z+d+h,
+                                        x+d  ,y+d  ,z+d+h,
+                                        x+d  ,y+d  ,z+d  ,
                                         ])
             self.hintColorsGL.extend(colorY*16)
-            self.hintVerticesGL.extend([ -d-h, -d  , -d  ,\
-                                         -d-h, -d-h, -d-h,\
-                                         -d-h, -d-h,z+d+h,\
-                                         -d-h, -d  ,z+d  ,\
-                                         -d  , -d  , -d  ,\
-                                         -d-h, -d  , -d  ,\
-                                         -d-h, -d  ,z+d  ,\
-                                         -d  , -d  ,z+d  ,\
-                                         -d  , -d-h, -d  ,\
-                                         -d  , -d  , -d  ,\
-                                         -d  , -d  ,z+d  ,\
-                                         -d  , -d-h,z+d  ,\
-                                         -d-h, -d-h, -d-h,\
-                                         -d  , -d-h, -d  ,\
-                                         -d  , -d-h,z+d  ,\
-                                         -d-h, -d-h,z+d+h,\
-                                        x+d  , -d  , -d  ,\
-                                        x+d  , -d-h, -d  ,\
-                                        x+d  , -d-h,z+d  ,\
-                                        x+d  , -d  ,z+d  ,\
-                                        x+d+h, -d  , -d  ,\
-                                        x+d  , -d  , -d  ,\
-                                        x+d  , -d  ,z+d  ,\
-                                        x+d+h, -d  ,z+d  ,\
-                                        x+d+h, -d-h, -d-h,\
-                                        x+d+h, -d  , -d  ,\
-                                        x+d+h, -d  ,z+d  ,\
-                                        x+d+h, -d-h,z+d+h,\
-                                        x+d  , -d-h, -d  ,\
-                                        x+d+h, -d-h, -d-h,\
-                                        x+d+h, -d-h,z+d+h,\
-                                        x+d  , -d-h,z+d  ,\
-                                         -d-h,y+d+h, -d-h,\
-                                         -d-h,y+d  , -d  ,\
-                                         -d-h,y+d  ,z+d  ,\
-                                         -d-h,y+d+h,z+d+h,\
-                                         -d  ,y+d+h, -d  ,\
-                                         -d-h,y+d+h, -d-h,\
-                                         -d-h,y+d+h,z+d+h,\
-                                         -d  ,y+d+h,z+d  ,\
-                                         -d  ,y+d  , -d  ,\
-                                         -d  ,y+d+h, -d  ,\
-                                         -d  ,y+d+h,z+d  ,\
-                                         -d  ,y+d  ,z+d  ,\
-                                         -d-h,y+d  , -d  ,\
-                                         -d  ,y+d  , -d  ,\
-                                         -d  ,y+d  ,z+d  ,\
-                                         -d-h,y+d  ,z+d  ,\
-                                        x+d  ,y+d+h, -d  ,\
-                                        x+d  ,y+d  , -d  ,\
-                                        x+d  ,y+d  ,z+d  ,\
-                                        x+d  ,y+d+h,z+d  ,\
-                                        x+d+h,y+d+h, -d-h,\
-                                        x+d  ,y+d+h, -d  ,\
-                                        x+d  ,y+d+h,z+d  ,\
-                                        x+d+h,y+d+h,z+d+h,\
-                                        x+d+h,y+d  , -d  ,\
-                                        x+d+h,y+d+h, -d-h,\
-                                        x+d+h,y+d+h,z+d+h,\
-                                        x+d+h,y+d  ,z+d  ,\
-                                        x+d  ,y+d  , -d  ,\
-                                        x+d+h,y+d  , -d  ,\
-                                        x+d+h,y+d  ,z+d  ,\
-                                        x+d  ,y+d  ,z+d  ,\
+            self.hintVerticesGL.extend([ -d-h, -d  , -d  ,
+                                         -d-h, -d-h, -d-h,
+                                         -d-h, -d-h,z+d+h,
+                                         -d-h, -d  ,z+d  ,
+                                         -d  , -d  , -d  ,
+                                         -d-h, -d  , -d  ,
+                                         -d-h, -d  ,z+d  ,
+                                         -d  , -d  ,z+d  ,
+                                         -d  , -d-h, -d  ,
+                                         -d  , -d  , -d  ,
+                                         -d  , -d  ,z+d  ,
+                                         -d  , -d-h,z+d  ,
+                                         -d-h, -d-h, -d-h,
+                                         -d  , -d-h, -d  ,
+                                         -d  , -d-h,z+d  ,
+                                         -d-h, -d-h,z+d+h,
+                                        x+d  , -d  , -d  ,
+                                        x+d  , -d-h, -d  ,
+                                        x+d  , -d-h,z+d  ,
+                                        x+d  , -d  ,z+d  ,
+                                        x+d+h, -d  , -d  ,
+                                        x+d  , -d  , -d  ,
+                                        x+d  , -d  ,z+d  ,
+                                        x+d+h, -d  ,z+d  ,
+                                        x+d+h, -d-h, -d-h,
+                                        x+d+h, -d  , -d  ,
+                                        x+d+h, -d  ,z+d  ,
+                                        x+d+h, -d-h,z+d+h,
+                                        x+d  , -d-h, -d  ,
+                                        x+d+h, -d-h, -d-h,
+                                        x+d+h, -d-h,z+d+h,
+                                        x+d  , -d-h,z+d  ,
+                                         -d-h,y+d+h, -d-h,
+                                         -d-h,y+d  , -d  ,
+                                         -d-h,y+d  ,z+d  ,
+                                         -d-h,y+d+h,z+d+h,
+                                         -d  ,y+d+h, -d  ,
+                                         -d-h,y+d+h, -d-h,
+                                         -d-h,y+d+h,z+d+h,
+                                         -d  ,y+d+h,z+d  ,
+                                         -d  ,y+d  , -d  ,
+                                         -d  ,y+d+h, -d  ,
+                                         -d  ,y+d+h,z+d  ,
+                                         -d  ,y+d  ,z+d  ,
+                                         -d-h,y+d  , -d  ,
+                                         -d  ,y+d  , -d  ,
+                                         -d  ,y+d  ,z+d  ,
+                                         -d-h,y+d  ,z+d  ,
+                                        x+d  ,y+d+h, -d  ,
+                                        x+d  ,y+d  , -d  ,
+                                        x+d  ,y+d  ,z+d  ,
+                                        x+d  ,y+d+h,z+d  ,
+                                        x+d+h,y+d+h, -d-h,
+                                        x+d  ,y+d+h, -d  ,
+                                        x+d  ,y+d+h,z+d  ,
+                                        x+d+h,y+d+h,z+d+h,
+                                        x+d+h,y+d  , -d  ,
+                                        x+d+h,y+d+h, -d-h,
+                                        x+d+h,y+d+h,z+d+h,
+                                        x+d+h,y+d  ,z+d  ,
+                                        x+d  ,y+d  , -d  ,
+                                        x+d+h,y+d  , -d  ,
+                                        x+d+h,y+d  ,z+d  ,
+                                        x+d  ,y+d  ,z+d  ,
                                         ])
             self.hintColorsGL.extend(colorZ*16)
         # convert to GL format
@@ -1318,6 +1353,138 @@ class ClassicMazeScene:
         glVertexPointer(3, GL_FLOAT, 0, self.hintVerticesGL)
         glColorPointer(4, GL_FLOAT, 0, self.hintColorsGL)
         glDrawArrays(self.hintModeGL, 0, len(self.hintVerticesGL) // 3)
+
+
+    def buildMaze(self, size=[5,5,5,5]):
+        # build maze
+        self.size = np.array(size,'int')
+        self.maze = np.zeros(self.size, 'int')
+        p = 0.3 # probability of wall
+        for i in range(self.size[0]):
+            for j in range(self.size[1]):
+                for k in range(self.size[2]):
+                    for h in range(self.size[3]):
+                        self.maze[i,j,k,h] = BLOCK_BIT if random() > p else 0
+        # set goal
+        self.goal = self.size-1
+        # remove wall from goal (if applicable)
+        self.maze[self.goal[0], self.goal[1], self.goal[2], self.goal[3]] = 0
+        # set user at start
+        self.position = np.zeros(4, 'int') #np.array([4,4,4,0])
+        # remove wall from start (if applicable)
+        self.maze[self.position[0], self.position[1], self.position[2], self.position[3]] = 0
+        # set victory status
+        self.victory = False
+        self.checkVictory()
+
+
+    def solveMaze(self):
+        i = self.position[0]
+        j = self.position[1]
+        k = self.position[2]
+        h = self.position[3]        
+        self.maze[0] |= VISIT_BIT
+        queue = [(i,j,k,h)]
+        while queue:
+            i,j,k,h = queue.pop()
+            #drawMaze(maze, n, m)
+            #print(queue)
+            #print('')
+            #print([i for i,j,k,h in queue])
+            #print([j for i,j,k,h in queue])
+            #print([k for i,j,k,h in queue])
+            #print([h for i,j,k,h in queue])
+
+            # X-
+            i -= 1
+            if i >= 0 and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            i += 1
+            # X+
+            i += 1
+            if i < self.size[0] and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            i -= 1
+            # Y-
+            j -= 1
+            if j >= 0 and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            j += 1
+            # Y+
+            j += 1
+            if j < self.size[1] and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            j -= 1
+            # Z-
+            k -= 1
+            if k >= 0 and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            k += 1
+            # Z+
+            k += 1
+            if k < self.size[2] and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            k -= 1
+            # W-
+            h -= 1
+            if h >= 0 and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            h += 1
+            # W+
+            h += 1
+            if h < self.size[3] and not (self.maze[i,j,k,h] & (BLOCK_BIT|VISIT_BIT)):
+                if i == self.goal[0] and\
+                   j == self.goal[1] and\
+                   k == self.goal[2] and\
+                   h == self.goal[3]:
+                    return True
+                self.maze[i,j,k,h] |= VISIT_BIT
+                queue.append((i,j,k,h))
+            h -= 1
+        return False
+
 
 ################################################################################
 # MAIN
